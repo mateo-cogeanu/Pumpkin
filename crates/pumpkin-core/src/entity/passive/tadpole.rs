@@ -1,3 +1,7 @@
+use crate::entity::ai::{
+    control::smooth_swimming_move_control::SmoothSwimmingMoveControl, pathfinder::Navigator,
+};
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, Weak};
 
 use pumpkin_data::entity::EntityType;
@@ -14,8 +18,8 @@ use crate::entity::{
     ageable::{AgeableData, AgeableMob},
     ai::goal::{
         escape_danger::EscapeDangerGoal, look_around::RandomLookAroundGoal,
-        look_at_entity::LookAtEntityGoal, swim::SwimGoal, tempt::TemptGoal,
-        try_find_water::TryFindWaterGoal, wander_around::WanderAroundGoal,
+        look_at_entity::LookAtEntityGoal, tempt::TemptGoal, try_find_water::TryFindWaterGoal,
+        wander_around::WanderAroundGoal,
     },
     mob::{Mob, MobEntity},
     player::Player,
@@ -30,7 +34,17 @@ pub struct TadpoleEntity {
 
 impl TadpoleEntity {
     pub fn new(entity: Entity) -> Arc<Self> {
-        let mob_entity = MobEntity::new(entity);
+        let mut mob_entity = MobEntity::new(entity);
+        mob_entity
+            .living_entity
+            .uses_move_control
+            .store(true, Ordering::Relaxed);
+        mob_entity.set_swimming_navigation(Navigator::water_bound(false));
+        *mob_entity
+            .move_control
+            .get_mut()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) =
+            Box::new(SmoothSwimmingMoveControl::new(85, 10, 0.02, 0.1, true));
         let tadpole = Self {
             mob_entity,
             ageable_data: AgeableData::default(),
@@ -49,10 +63,9 @@ impl TadpoleEntity {
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
 
             goal_selector.add_goal(0, Box::new(TryFindWaterGoal));
-            goal_selector.add_goal(0, Box::new(SwimGoal::default()));
             goal_selector.add_goal(1, EscapeDangerGoal::new(1.5));
             goal_selector.add_goal(2, Box::new(TemptGoal::new(1.25, TEMPT_ITEMS, false)));
-            goal_selector.add_goal(3, Box::new(WanderAroundGoal::new(1.0)));
+            goal_selector.add_goal(3, Box::new(WanderAroundGoal::swimming(1.0, 40)));
             goal_selector.add_goal(
                 4,
                 LookAtEntityGoal::with_default(mob_weak, &EntityType::PLAYER, 6.0),
@@ -76,6 +89,14 @@ impl AgeableMob for TadpoleEntity {
 }
 
 impl Mob for TadpoleEntity {
+    fn custom_travel(&self, caller: &dyn EntityBase) -> bool {
+        super::fish::travel(self, caller)
+    }
+
+    fn mob_is_pushed_by_fluids(&self) -> bool {
+        false
+    }
+
     fn as_ageable(&self) -> Option<&dyn AgeableMob> {
         Some(self)
     }

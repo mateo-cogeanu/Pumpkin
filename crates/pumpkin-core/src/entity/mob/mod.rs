@@ -162,6 +162,18 @@ impl MobEntity {
         }
     }
 
+    pub fn set_swimming_navigation(&self, mut navigator: Navigator) {
+        navigator.set_pathfinding_malus(crate::entity::ai::pathfinder::node::PathType::Water, 0.0);
+        navigator.set_mob_dimensions(
+            self.living_entity.entity.width(),
+            self.living_entity.entity.height(),
+        );
+        *self
+            .navigator
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = navigator;
+    }
+
     #[must_use]
     pub fn new(entity: Entity) -> Self {
         Self {
@@ -1139,6 +1151,17 @@ pub trait Mob: EntityBase + Send + Sync {
     /// Runs after navigation and before the movement controls, where vanilla ticks a mob's brain.
     fn custom_server_ai_step(&self, _caller: &dyn EntityBase) {}
 
+    /// Moves the mob for this tick in place of the usual walking and swimming
+    /// physics, returning whether it did; vanilla mobs that override `travel`.
+    fn custom_travel(&self, _caller: &dyn EntityBase) -> bool {
+        false
+    }
+
+    /// Whether currents push this mob along. Water animals hold their ground.
+    fn mob_is_pushed_by_fluids(&self) -> bool {
+        true
+    }
+
     /// Builds this mob's brain from its saved memories; goal mobs keep the brain-dead default.
     fn make_brain(&self, _packed: &PackedMemories) -> Brain {
         Brain::default()
@@ -1335,6 +1358,10 @@ pub trait Mob: EntityBase + Send + Sync {
 impl<T: Mob + Send + 'static> EntityBase for T {
     fn get_mob(&self) -> Option<&dyn Mob> {
         Some(self)
+    }
+
+    fn is_pushed_by_fluids(&self) -> bool {
+        self.mob_is_pushed_by_fluids()
     }
 
     fn is_pushable(&self) -> bool {

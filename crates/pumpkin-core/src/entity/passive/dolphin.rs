@@ -1,3 +1,6 @@
+use crate::entity::ai::{
+    control::smooth_swimming_move_control::SmoothSwimmingMoveControl, pathfinder::Navigator,
+};
 use std::sync::{
     Arc, Weak,
     atomic::{AtomicBool, AtomicI32, Ordering},
@@ -16,8 +19,7 @@ use crate::entity::{
     ai::goal::{
         escape_danger::EscapeDangerGoal, look_around::RandomLookAroundGoal,
         look_at_entity::LookAtEntityGoal, melee_attack::MeleeAttackGoal, revenge::RevengeGoal,
-        swim::SwimGoal, tempt::TemptGoal, try_find_water::TryFindWaterGoal,
-        wander_around::WanderAroundGoal,
+        tempt::TemptGoal, try_find_water::TryFindWaterGoal, wander_around::WanderAroundGoal,
     },
     mob::{Mob, MobEntity},
     player::Player,
@@ -33,7 +35,17 @@ pub struct DolphinEntity {
 
 impl DolphinEntity {
     pub fn new(entity: Entity) -> Arc<Self> {
-        let mob_entity = MobEntity::new(entity);
+        let mut mob_entity = MobEntity::new(entity);
+        mob_entity
+            .living_entity
+            .uses_move_control
+            .store(true, Ordering::Relaxed);
+        mob_entity.set_swimming_navigation(Navigator::water_bound(true));
+        *mob_entity
+            .move_control
+            .get_mut()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) =
+            Box::new(SmoothSwimmingMoveControl::new(85, 10, 0.02, 0.1, true));
         let dolphin = Self {
             mob_entity,
             got_fish: AtomicBool::new(false),
@@ -53,11 +65,10 @@ impl DolphinEntity {
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
 
             goal_selector.add_goal(0, Box::new(TryFindWaterGoal));
-            goal_selector.add_goal(0, Box::new(SwimGoal::default()));
             goal_selector.add_goal(1, EscapeDangerGoal::new(1.6));
             goal_selector.add_goal(2, Box::new(MeleeAttackGoal::new(1.2, true)));
             goal_selector.add_goal(3, Box::new(TemptGoal::new(1.2, TEMPT_ITEMS, false)));
-            goal_selector.add_goal(4, Box::new(WanderAroundGoal::new(1.0)));
+            goal_selector.add_goal(4, Box::new(WanderAroundGoal::swimming(1.0, 80)));
             goal_selector.add_goal(
                 5,
                 LookAtEntityGoal::with_default(mob_weak, &EntityType::PLAYER, 6.0),
@@ -89,6 +100,19 @@ impl DolphinEntity {
 }
 
 impl Mob for DolphinEntity {
+    fn custom_travel(&self, caller: &dyn EntityBase) -> bool {
+        super::swimming::travel(
+            self,
+            caller,
+            f64::from(self.mob_entity.living_entity.movement_speed.load()),
+            self.mob_entity
+                .target
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .is_none(),
+        )
+    }
+
     fn mob_write_nbt(&self, nbt: &mut NbtCompound) {
         nbt.put_bool("GotFish", self.got_fish());
         nbt.put_int("Moistness", self.moistness_level.load(Ordering::Relaxed));

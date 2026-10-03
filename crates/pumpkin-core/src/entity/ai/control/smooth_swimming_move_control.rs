@@ -1,5 +1,6 @@
 use crate::entity::ai::control::move_control::Operation;
 use crate::entity::ai::control::{Control, MoveControlTrait};
+use crate::entity::ai::pathfinder::path::Path;
 use crate::entity::mob::Mob;
 use pumpkin_data::attributes::Attributes;
 use pumpkin_util::math::vector3::Vector3;
@@ -57,13 +58,28 @@ impl MoveControlTrait for SmoothSwimmingMoveControl {
 
         if self.apply_gravity && entity.touching_water.load(Ordering::Relaxed) {
             let vel = entity.velocity.load();
-            entity.set_velocity(Vector3::new(vel.x, vel.y + 0.005, vel.z));
+            entity
+                .velocity
+                .store(Vector3::new(vel.x, vel.y + 0.005, vel.z));
         }
 
-        let is_idle = mob_entity
-            .navigator
-            .try_lock()
-            .is_ok_and(|navigator| navigator.is_idle());
+        // Pumpkin's navigator writes movement input directly. Pass its waypoint to
+        // this controller as well so swimming steering and speed are applied.
+        let is_idle = {
+            let navigator = mob_entity
+                .navigator
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if let Some(pos) = navigator.get_path().and_then(Path::get_next_node_pos) {
+                self.set_wanted_position(
+                    f64::from(pos.0.x) + 0.5,
+                    f64::from(pos.0.y),
+                    f64::from(pos.0.z) + 0.5,
+                    navigator.get_speed_modifier(),
+                );
+            }
+            navigator.is_done()
+        };
 
         if self.operation == Operation::MoveTo && !is_idle {
             let pos = entity.pos.load();
@@ -90,7 +106,9 @@ impl MoveControlTrait for SmoothSwimmingMoveControl {
             let speed = (self.speed_modifier * movement_speed) as f32;
 
             if entity.touching_water.load(Ordering::Relaxed) {
-                let water_speed = speed * self.in_water_speed_modifier;
+                living_entity
+                    .movement_speed
+                    .store(speed * self.in_water_speed_modifier);
                 let sqrt = xd.hypot(zd);
                 if yd.abs() > 1.0E-5 || sqrt > 1.0E-5 {
                     let mut x_rot_d = -((yd.atan2(sqrt).to_degrees()) as f32);
@@ -106,18 +124,20 @@ impl MoveControlTrait for SmoothSwimmingMoveControl {
                 let sin = pitch_rad.sin();
                 living_entity.movement_input.store(Vector3::new(
                     0.0,
-                    -(sin * water_speed) as f64,
-                    (cos * water_speed) as f64,
+                    -(sin * speed) as f64,
+                    (cos * speed) as f64,
                 ));
             } else {
                 let left_to_turn = wrap_degrees(entity.yaw.load() - y_rot_d).abs();
                 let factor = Self::get_turning_speed_factor(left_to_turn);
                 let land_speed = speed * self.outside_water_speed_modifier * factor;
+                living_entity.movement_speed.store(land_speed);
                 living_entity
                     .movement_input
                     .store(Vector3::new(0.0, 0.0, land_speed as f64));
             }
         } else {
+            living_entity.movement_speed.store(0.0);
             living_entity
                 .movement_input
                 .store(Vector3::new(0.0, 0.0, 0.0));

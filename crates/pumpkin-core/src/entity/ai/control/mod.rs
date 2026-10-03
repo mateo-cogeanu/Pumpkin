@@ -2,6 +2,7 @@ use crate::entity::mob::Mob;
 use pumpkin_util::math::subtract_angles;
 
 pub mod body_rotation_control;
+pub mod fish_move_control;
 pub mod flying_move_control;
 pub mod jump_control;
 pub mod look_control;
@@ -28,3 +29,5 @@ pub trait MoveControlTrait: Control {
         false
     }
 }
+
+pub mod turtle_move_control;

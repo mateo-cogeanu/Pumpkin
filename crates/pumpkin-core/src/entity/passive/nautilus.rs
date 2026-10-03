@@ -1,3 +1,7 @@
+use crate::entity::ai::goal::wander_around::WanderAroundGoal;
+use crate::entity::ai::{
+    control::smooth_swimming_move_control::SmoothSwimmingMoveControl, pathfinder::Navigator,
+};
 use crossbeam::atomic::AtomicCell;
 use std::sync::{
     Arc, Mutex,
@@ -36,7 +40,22 @@ pub struct NautilusEntity {
 
 impl NautilusEntity {
     pub fn new(entity: Entity) -> Arc<Self> {
-        let mob_entity = MobEntity::new(entity);
+        let mut mob_entity = MobEntity::new(entity);
+        mob_entity
+            .living_entity
+            .uses_move_control
+            .store(true, Ordering::Relaxed);
+        mob_entity.set_swimming_navigation(Navigator::water_bound(false));
+        *mob_entity
+            .move_control
+            .get_mut()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) =
+            Box::new(SmoothSwimmingMoveControl::new(85, 10, 0.011, 0.0, true));
+        mob_entity
+            .goals_selector
+            .get_mut()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .add_goal(0, Box::new(WanderAroundGoal::swimming(1.0, 120)));
         let nautilus = Self {
             mob_entity,
             is_tame: AtomicBool::new(false),
@@ -204,6 +223,19 @@ impl CustomSound for NautilusEntity {
 }
 
 impl Mob for NautilusEntity {
+    fn custom_travel(&self, caller: &dyn EntityBase) -> bool {
+        super::swimming::travel(
+            self,
+            caller,
+            f64::from(self.mob_entity.living_entity.movement_speed.load()),
+            false,
+        )
+    }
+
+    fn mob_is_pushed_by_fluids(&self) -> bool {
+        false
+    }
+
     fn as_custom_sound(&self) -> Option<&dyn crate::entity::custom_sound::CustomSound> {
         Some(self)
     }

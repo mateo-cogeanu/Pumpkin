@@ -11,6 +11,7 @@ pub mod copper_golem;
 pub mod cow;
 pub mod dolphin;
 pub mod donkey;
+pub mod fish;
 pub mod fox;
 pub mod frog;
 pub mod glow_squid;
@@ -45,3 +46,5 @@ pub mod villager;
 pub mod wandering_trader;
 pub mod wolf;
 pub mod zombie_horse;
+
+pub mod swimming;

@@ -15,8 +15,8 @@ use crate::entity::{
     ageable::{AgeableData, AgeableMob},
     ai::goal::{
         breed::BreedGoal, escape_danger::EscapeDangerGoal, look_around::RandomLookAroundGoal,
-        look_at_entity::LookAtEntityGoal, swim::SwimGoal, tempt::TemptGoal,
-        try_find_water::TryFindWaterGoal, wander_around::WanderAroundGoal,
+        look_at_entity::LookAtEntityGoal, tempt::TemptGoal, try_find_water::TryFindWaterGoal,
+        wander_around::WanderAroundGoal,
     },
     mob::{Mob, MobEntity},
     passive::animal::Animal,
@@ -34,7 +34,14 @@ pub struct TurtleEntity {
 
 impl TurtleEntity {
     pub fn new(entity: Entity) -> Arc<Self> {
-        let mob_entity = MobEntity::new(entity);
+        let mut mob_entity = MobEntity::new(entity);
+        mob_entity
+            .set_swimming_navigation(crate::entity::ai::pathfinder::Navigator::amphibious(true));
+        *mob_entity
+            .move_control
+            .get_mut()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) =
+            Box::new(crate::entity::ai::control::turtle_move_control::TurtleMoveControl::default());
         let turtle = Self {
             mob_entity,
             ageable_data: AgeableData::default(),
@@ -55,7 +62,6 @@ impl TurtleEntity {
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
 
             goal_selector.add_goal(0, Box::new(TryFindWaterGoal));
-            goal_selector.add_goal(1, Box::new(SwimGoal::default()));
             goal_selector.add_goal(2, EscapeDangerGoal::new(1.2));
             goal_selector.add_goal(3, BreedGoal::new(1.0));
             goal_selector.add_goal(4, Box::new(TemptGoal::new(1.1, TEMPT_ITEMS, false)));
@@ -107,6 +113,16 @@ impl Animal for TurtleEntity {
 }
 
 impl Mob for TurtleEntity {
+    fn custom_travel(&self, caller: &dyn EntityBase) -> bool {
+        let sink = self
+            .mob_entity
+            .target
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .is_none();
+        super::swimming::travel(self, caller, 0.1, sink)
+    }
+
     fn as_ageable(&self) -> Option<&dyn AgeableMob> {
         Some(self)
     }

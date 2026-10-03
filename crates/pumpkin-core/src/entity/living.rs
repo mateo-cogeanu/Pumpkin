@@ -97,6 +97,8 @@ pub struct LivingEntity {
     pub entity_equipment: Arc<std::sync::Mutex<EntityEquipment>>,
     pub equipment_drop_chances: Arc<std::sync::Mutex<FxHashMap<EquipmentSlot, f32>>>,
     pub movement_input: AtomicCell<Vector3<f64>>,
+    pub movement_speed: AtomicCell<f32>,
+    pub uses_move_control: AtomicBool,
     pub equipment_slots: Arc<FxHashMap<usize, EquipmentSlot>>,
 
     pub jumping: AtomicBool,
@@ -312,6 +314,8 @@ impl LivingEntity {
             last_hurt_by_mob_id: AtomicI32::new(0),
             last_hurt_by_mob_time: AtomicI64::new(0),
             movement_input: AtomicCell::new(Vector3::default()),
+            movement_speed: AtomicCell::new(0.0),
+            uses_move_control: AtomicBool::new(false),
             water_movement_speed_multiplier,
             last_block_pos: AtomicCell::new(None),
             equipment_attribute_modifier_ids: std::sync::Mutex::new(FxHashMap::default()),
@@ -1414,6 +1418,11 @@ impl LivingEntity {
 
         if !effective_ai {
             // No travel.
+        } else if caller
+            .get_mob()
+            .is_some_and(|mob| mob.custom_travel(caller))
+        {
+            // The mob moved itself.
         } else if (touching_water || self.entity.touching_lava.load(SeqCst))
             && should_swim_in_fluids
             && self.entity.entity_type != &EntityType::STRIDER
@@ -1676,7 +1685,7 @@ impl LivingEntity {
         }
     }
 
-    fn make_move(&self, caller: &dyn EntityBase) {
+    pub(crate) fn make_move(&self, caller: &dyn EntityBase) {
         self.entity.move_entity(caller, self.entity.velocity.load());
 
         self.check_climbing();

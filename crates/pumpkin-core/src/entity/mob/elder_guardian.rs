@@ -11,7 +11,7 @@ use crate::entity::{
     Entity, EntityBase,
     ai::goal::{
         active_target::ActiveTargetGoal, look_around::RandomLookAroundGoal,
-        look_at_entity::LookAtEntityGoal, swim::SwimGoal, wander_around::WanderAroundGoal,
+        look_at_entity::LookAtEntityGoal, wander_around::WanderAroundGoal,
     },
     mob::{Mob, MobEntity},
 };
@@ -24,6 +24,8 @@ pub struct ElderGuardianEntity {
 impl ElderGuardianEntity {
     pub fn new(entity: Entity) -> Arc<Self> {
         let mob_entity = MobEntity::new(entity);
+        mob_entity
+            .set_swimming_navigation(crate::entity::ai::pathfinder::Navigator::water_bound(false));
         let guardian = Self {
             mob_entity,
             tick_count: AtomicI32::new(0),
@@ -41,8 +43,7 @@ impl ElderGuardianEntity {
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
 
-            goal_selector.add_goal(0, Box::new(SwimGoal::default()));
-            goal_selector.add_goal(4, Box::new(WanderAroundGoal::new(1.0)));
+            goal_selector.add_goal(4, Box::new(WanderAroundGoal::swimming(1.0, 80)));
             goal_selector.add_goal(
                 5,
                 LookAtEntityGoal::with_default(mob_weak.clone(), &EntityType::PLAYER, 8.0),
@@ -65,6 +66,17 @@ impl ElderGuardianEntity {
 }
 
 impl Mob for ElderGuardianEntity {
+    fn custom_travel(&self, caller: &dyn EntityBase) -> bool {
+        let sink = self.is_navigator_idle()
+            && self
+                .mob_entity
+                .target
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .is_none();
+        crate::entity::passive::swimming::travel(self, caller, 0.1, sink)
+    }
+
     fn get_mob_entity(&self) -> &MobEntity {
         &self.mob_entity
     }

@@ -368,6 +368,7 @@ impl EvaluatorKind {
 pub trait PathNavigationTrait: Send + Sync {
     fn set_progress(&mut self, goal: NavigatorGoal);
     fn set_speed(&mut self, speed: f64);
+    fn get_speed_modifier(&self) -> f64;
     fn stop(&mut self);
     fn is_idle(&self) -> bool;
     fn is_done(&self) -> bool;
@@ -410,6 +411,12 @@ pub trait PathNavigationTrait: Send + Sync {
     fn get_target_pos(&self) -> Option<BlockPos>;
     fn can_path_to_targets_below_surface(&self) -> bool;
     fn set_can_path_to_targets_below_surface(&mut self, can_path: bool);
+
+    /// Whether the mob can settle at `pos`, which random targets are checked
+    /// against: vanilla's `PathNavigation.isStableDestination`.
+    fn is_stable_destination(&self, world: &World, pos: &BlockPos) -> bool {
+        world.get_block_state(&pos.down()).is_solid()
+    }
 }
 
 pub struct PathNavigation {
@@ -578,6 +585,7 @@ impl PathNavigation {
         let context = PathfindingContext::new(mob_position, entity.entity.world.load_full());
         let mut mob_data = MobData::new(start_pos_f, self.mob_width, self.mob_height, 1.0);
         mob_data.on_ground = entity.entity.on_ground.load(Ordering::Relaxed);
+        mob_data.is_in_water = entity.entity.touching_water.load(Ordering::Relaxed);
         mob_data.can_swim = self.can_float;
 
         mob_data.set_pathfinding_malus(PathType::DangerFire, 16.0);
@@ -839,10 +847,52 @@ impl PathNavigation {
         self.is_stuck = false;
     }
 
+    fn follow_swimming_path(&mut self, entity: &LivingEntity, vertical_tolerance: f64) {
+        let Some(path) = &mut self.path else {
+            return;
+        };
+        let Some(pos) = path.get_next_node_pos() else {
+            return;
+        };
+        let target = Vector3::new(
+            f64::from(pos.0.x) + 0.5,
+            f64::from(pos.0.y),
+            f64::from(pos.0.z) + 0.5,
+        );
+        let current = entity.entity.pos.load();
+        let delta = target - current;
+        let width = entity.entity.width();
+        let tolerance = f64::from(if width > 0.75 {
+            width / 2.0
+        } else {
+            0.75 - width / 2.0
+        });
+        let mob_pos = current.add_raw(0.0, f64::from(self.mob_height) * 0.5, 0.0);
+        let close = delta.x.abs() < tolerance
+            && delta.z.abs() < tolerance
+            && delta.y.abs() < vertical_tolerance;
+        let can_skip = path.get_next_node_index() + 1 < path.get_node_count()
+            && (target - mob_pos).length_squared() < 4.0
+            && Self::can_move_directly(
+                &entity.entity.world.load(),
+                mob_pos,
+                target,
+                self.mob_height,
+                false,
+            );
+        if close || can_skip || Self::should_target_next_node_in_direction(mob_pos, path) {
+            path.advance();
+        }
+    }
+
     pub fn do_stuck_detection(&mut self, mob_pos: Vector3<f64>, entity: &LivingEntity) {
         let world_age = entity.entity.world.load().get_world_age() as u64;
         if self.tick_count.saturating_sub(self.last_stuck_check) > 100 {
-            let speed = entity.get_attribute_value(&Attributes::MOVEMENT_SPEED) as f32;
+            let speed = if entity.uses_move_control.load(Ordering::Relaxed) {
+                entity.movement_speed.load()
+            } else {
+                entity.get_attribute_value(&Attributes::MOVEMENT_SPEED) as f32
+            };
             let effective_speed = if speed >= 1.0 { speed } else { speed * speed };
             let threshold_distance = effective_speed * 100.0 * 0.25;
             let dx = mob_pos.x - self.last_stuck_check_pos.x;
@@ -876,7 +926,11 @@ impl PathNavigation {
                     f64::from(pos.0.z) + 0.5,
                 );
                 let dist_to_node = (mob_pos - node_center).length();
-                let speed = entity.get_attribute_value(&Attributes::MOVEMENT_SPEED);
+                let speed = if entity.uses_move_control.load(Ordering::Relaxed) {
+                    f64::from(entity.movement_speed.load())
+                } else {
+                    entity.get_attribute_value(&Attributes::MOVEMENT_SPEED)
+                };
                 self.timeout_limit = if speed > 0.0 {
                     dist_to_node / speed * 20.0
                 } else {
@@ -1185,6 +1239,10 @@ impl PathNavigationTrait for GroundPathNavigation {
         self.inner.set_speed(speed);
     }
 
+    fn get_speed_modifier(&self) -> f64 {
+        self.inner.speed_modifier
+    }
+
     fn stop(&mut self) {
         self.inner.stop();
     }
@@ -1419,6 +1477,10 @@ impl PathNavigationTrait for FlyingPathNavigation {
 
     fn set_speed(&mut self, speed: f64) {
         self.inner.set_speed(speed);
+    }
+
+    fn get_speed_modifier(&self) -> f64 {
+        self.inner.speed_modifier
     }
 
     fn stop(&mut self) {
@@ -1722,6 +1784,10 @@ impl PathNavigationTrait for WaterBoundPathNavigation {
         self.inner.set_speed(speed);
     }
 
+    fn get_speed_modifier(&self) -> f64 {
+        self.inner.speed_modifier
+    }
+
     fn stop(&mut self) {
         self.inner.stop();
     }
@@ -1802,24 +1868,7 @@ impl PathNavigationTrait for WaterBoundPathNavigation {
         if self.is_done() {
             self.inner.finish_navigation(entity);
         } else {
-            if let Some(path) = &mut self.inner.path
-                && let Some(pos) = path.get_next_node_pos()
-            {
-                let target_pos = Vector3::new(
-                    f64::from(pos.0.x) + 0.5,
-                    f64::from(pos.0.y) + 0.5,
-                    f64::from(pos.0.z) + 0.5,
-                );
-                let current_pos = entity.entity.pos.load();
-                let dx = target_pos.x - current_pos.x;
-                let dy = target_pos.y - current_pos.y;
-                let dz = target_pos.z - current_pos.z;
-                let dist_sq = dx * dx + dy * dy + dz * dz;
-
-                if dist_sq < 0.5 * 0.5 {
-                    path.advance();
-                }
-            }
+            self.inner.follow_swimming_path(entity, 0.5);
 
             if !self.is_done()
                 && let Some(path) = &self.inner.path
@@ -1827,7 +1876,7 @@ impl PathNavigationTrait for WaterBoundPathNavigation {
             {
                 let target_pos = Vector3::new(
                     f64::from(next_block.0.x) + 0.5,
-                    f64::from(next_block.0.y) + 0.5,
+                    f64::from(next_block.0.y),
                     f64::from(next_block.0.z) + 0.5,
                 );
                 let current_pos = entity.entity.pos.load();
@@ -1839,10 +1888,12 @@ impl PathNavigationTrait for WaterBoundPathNavigation {
                 let desired_yaw = wrap_degrees((dz.atan2(dx) as f32).to_degrees() - 90.0);
                 let desired_pitch = wrap_degrees(-(dy.atan2(sd) as f32).to_degrees());
 
-                entity.entity.yaw.store(desired_yaw);
-                entity.entity.head_yaw.store(desired_yaw);
-                entity.entity.body_yaw.store(desired_yaw);
-                entity.entity.pitch.store(desired_pitch);
+                if !entity.uses_move_control.load(Ordering::Relaxed) {
+                    entity.entity.yaw.store(desired_yaw);
+                    entity.entity.head_yaw.store(desired_yaw);
+                    entity.entity.body_yaw.store(desired_yaw);
+                    entity.entity.pitch.store(desired_pitch);
+                }
 
                 let speed = self.inner.speed_modifier
                     * entity.get_attribute_value(&Attributes::MOVEMENT_SPEED);
@@ -1875,7 +1926,7 @@ impl PathNavigationTrait for WaterBoundPathNavigation {
         let p = entity.entity.pos.load();
         let target = Vector3::new(
             f64::from(pos.0.x) + 0.5,
-            f64::from(pos.0.y) + 0.5,
+            f64::from(pos.0.y),
             f64::from(pos.0.z) + 0.5,
         );
         self.set_progress(NavigatorGoal::new(p, target, speed));
@@ -1989,6 +2040,11 @@ impl PathNavigationTrait for WaterBoundPathNavigation {
     fn set_can_path_to_targets_below_surface(&mut self, can_path: bool) {
         self.inner.can_path_to_targets_below_surface = can_path;
     }
+
+    /// A swimmer can hold still anywhere it is not inside a block.
+    fn is_stable_destination(&self, world: &World, pos: &BlockPos) -> bool {
+        !world.get_block_state(pos).is_solid()
+    }
 }
 
 pub struct WallClimberNavigation {
@@ -2020,6 +2076,10 @@ impl PathNavigationTrait for WallClimberNavigation {
 
     fn set_speed(&mut self, speed: f64) {
         self.inner.set_speed(speed);
+    }
+
+    fn get_speed_modifier(&self) -> f64 {
+        self.inner.inner.speed_modifier
     }
 
     fn stop(&mut self) {
@@ -2248,6 +2308,10 @@ impl PathNavigationTrait for AmphibiousPathNavigation {
         self.inner.set_speed(speed);
     }
 
+    fn get_speed_modifier(&self) -> f64 {
+        self.inner.speed_modifier
+    }
+
     fn stop(&mut self) {
         self.inner.stop();
     }
@@ -2329,24 +2393,7 @@ impl PathNavigationTrait for AmphibiousPathNavigation {
             if self.is_done() {
                 self.inner.finish_navigation(entity);
             } else {
-                if let Some(path) = &mut self.inner.path
-                    && let Some(pos) = path.get_next_node_pos()
-                {
-                    let target_pos = Vector3::new(
-                        f64::from(pos.0.x) + 0.5,
-                        f64::from(pos.0.y) + 0.5,
-                        f64::from(pos.0.z) + 0.5,
-                    );
-                    let current_pos = entity.entity.pos.load();
-                    let dx = target_pos.x - current_pos.x;
-                    let dy = target_pos.y - current_pos.y;
-                    let dz = target_pos.z - current_pos.z;
-                    let dist_sq = dx * dx + dy * dy + dz * dz;
-
-                    if dist_sq < 0.5 * 0.5 {
-                        path.advance();
-                    }
-                }
+                self.inner.follow_swimming_path(entity, 1.0);
 
                 if !self.is_done()
                     && let Some(path) = &self.inner.path
@@ -2354,7 +2401,7 @@ impl PathNavigationTrait for AmphibiousPathNavigation {
                 {
                     let target_pos = Vector3::new(
                         f64::from(next_block.0.x) + 0.5,
-                        f64::from(next_block.0.y) + 0.5,
+                        f64::from(next_block.0.y),
                         f64::from(next_block.0.z) + 0.5,
                     );
                     let current_pos = entity.entity.pos.load();
@@ -2366,10 +2413,12 @@ impl PathNavigationTrait for AmphibiousPathNavigation {
                     let desired_yaw = wrap_degrees((dz.atan2(dx) as f32).to_degrees() - 90.0);
                     let desired_pitch = wrap_degrees(-(dy.atan2(sd) as f32).to_degrees());
 
-                    entity.entity.yaw.store(desired_yaw);
-                    entity.entity.head_yaw.store(desired_yaw);
-                    entity.entity.body_yaw.store(desired_yaw);
-                    entity.entity.pitch.store(desired_pitch);
+                    if !entity.uses_move_control.load(Ordering::Relaxed) {
+                        entity.entity.yaw.store(desired_yaw);
+                        entity.entity.head_yaw.store(desired_yaw);
+                        entity.entity.body_yaw.store(desired_yaw);
+                        entity.entity.pitch.store(desired_pitch);
+                    }
 
                     let speed = self.inner.speed_modifier
                         * entity.get_attribute_value(&Attributes::MOVEMENT_SPEED);
@@ -2405,7 +2454,7 @@ impl PathNavigationTrait for AmphibiousPathNavigation {
         let p = entity.entity.pos.load();
         let target = Vector3::new(
             f64::from(pos.0.x) + 0.5,
-            f64::from(pos.0.y) + 0.5,
+            f64::from(pos.0.y),
             f64::from(pos.0.z) + 0.5,
         );
         self.set_progress(NavigatorGoal::new(p, target, speed));
@@ -2518,6 +2567,9 @@ impl PathNavigationTrait for AmphibiousPathNavigation {
 
     fn set_can_path_to_targets_below_surface(&mut self, can_path: bool) {
         self.inner.can_path_to_targets_below_surface = can_path;
+    }
+    fn is_stable_destination(&self, world: &World, pos: &BlockPos) -> bool {
+        !world.get_block_state(&pos.down()).is_air()
     }
 }
 
