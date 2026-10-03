@@ -18,6 +18,10 @@ immutable `fork-linux-<commit>` GitHub release. Old releases and tags remain.
 A successful source push can precede completion of the release build; check its
 workflow result before reporting a new Linux binary as available.
 
+First published Linux release: `fork-linux-703259f89779618de8147b71bcd5ed4783501a7e`.
+Native Linux startup and console shutdown passed in workflow run `37131428934`;
+the downloaded archive matches its SHA-256 checksum.
+
 The user confirmed both gameplay fixes with the macOS build on 2026-10-03.
 
 ## Patch commits
