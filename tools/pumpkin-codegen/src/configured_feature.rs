@@ -1,4 +1,4 @@
-use heck::ToPascalCase;
+use heck::{ToPascalCase, ToSnakeCase};
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 use serde_json::Value;
@@ -93,6 +93,27 @@ pub fn build_enum() -> TokenStream {
 /// Reads configured_feature files from 26.2 datapack and emits a `build_configured_features()` function `TokenStream`.
 pub fn build() -> TokenStream {
     let json = load_configured_features();
+
+    let mut providers = BTreeMap::new();
+    let data_dir = Path::new("../../assets/datapack/data");
+    for entry in fs::read_dir(data_dir)
+        .expect("Missing datapack data directory")
+        .flatten()
+    {
+        let directory = entry.path().join("worldgen/block_state_provider");
+        if directory.is_dir() {
+            let namespace = entry.file_name().to_string_lossy().into_owned();
+            collect_configured_features(&directory, &format!("{namespace}:"), &mut providers);
+        }
+    }
+    let provider_builders: Vec<TokenStream> = providers
+        .iter()
+        .map(|(name, value)| {
+            let function = block_state_provider_function(name);
+            let provider = value_to_block_state_provider(value);
+            quote! { fn #function() -> BlockStateProvider { #provider } }
+        })
+        .collect();
 
     let entries: Vec<TokenStream> = json
         .iter()
@@ -224,6 +245,7 @@ pub fn build() -> TokenStream {
             use pumpkin_util::math::vector3::Vector3;
             use pumpkin_util::HeightMap;
             use crate::generation::feature::features::drip_stone::small::SmallDripstoneFeature;
+            #(#provider_builders)*
             let mut map = std::collections::HashMap::new();
             #(#entries)*
             map
@@ -1067,6 +1089,17 @@ pub fn value_to_configured_feature(v: &Value) -> TokenStream {
     }
 }
 
+fn block_state_provider_function(reference: &str) -> proc_macro2::Ident {
+    let (namespace, name) = reference
+        .split_once(':')
+        .unwrap_or(("minecraft", reference));
+    format_ident!(
+        "block_state_provider_{}_{}",
+        namespace.to_snake_case(),
+        name.to_snake_case()
+    )
+}
+
 /// Converts a block-state-provider JSON object into its `BlockStateProvider` token stream.
 ///
 /// # Arguments
@@ -1075,6 +1108,10 @@ pub fn value_to_configured_feature(v: &Value) -> TokenStream {
 /// # Returns
 /// A `TokenStream` for the appropriate `BlockStateProvider` variant; defaults to `BlockStateProvider::Simple` with air if the type is unrecognised.
 fn value_to_block_state_provider(v: &Value) -> TokenStream {
+    if let Some(reference) = v.as_str() {
+        let function = block_state_provider_function(reference);
+        return quote! { #function() };
+    }
     if v.get("type").is_none() && (v.get("id").is_some() || v.get("Name").is_some()) {
         let state = value_to_block_state(v);
         return quote! { BlockStateProvider::Simple(SimpleStateProvider { state: #state }) };

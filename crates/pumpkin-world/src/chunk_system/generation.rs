@@ -142,6 +142,54 @@ mod tests {
     }
 
     #[test]
+    fn tree_soil_provider_preserves_ground_beneath_trunks() {
+        use crate::generation::feature::configured_features::{
+            CONFIGURED_FEATURES, ConfiguredFeature,
+        };
+        use crate::generation::feature::features::tree::trunk::TrunkPlacer;
+        use crate::generation::proto_chunk::{GenerationCache, ProtoChunk};
+        use pumpkin_data::{Block, configured_feature::ConfiguredFeature as FeatureKey};
+        use pumpkin_util::{
+            math::position::BlockPos,
+            random::{RandomGenerator, xoroshiro128::Xoroshiro},
+        };
+
+        let world_gen = get_world_gen(
+            Seed(42),
+            Dimension::OVERWORLD,
+            false,
+            Vec::new(),
+            String::new(),
+        );
+        let mut chunk = ProtoChunk::new(0, 0, &world_gen);
+        let mut random = RandomGenerator::Xoroshiro(Xoroshiro::from_seed(42));
+        let pos = BlockPos::new(8, 64, 8);
+        let Some(ConfiguredFeature::Tree(tree)) = CONFIGURED_FEATURES.get(&FeatureKey::Birch)
+        else {
+            panic!("birch must be a tree feature");
+        };
+        for (ground, expected) in [
+            (&Block::GRASS_BLOCK, &Block::DIRT),
+            (&Block::DIRT, &Block::DIRT),
+            (&Block::MOSS_BLOCK, &Block::MOSS_BLOCK),
+            (&Block::STONE, &Block::DIRT),
+        ] {
+            GenerationCache::set_block_state(&mut chunk, &pos.0, ground.default_state);
+            TrunkPlacer::set_dirt(
+                &BlockRegistry,
+                &mut chunk,
+                &mut random,
+                &pos,
+                &tree.below_trunk_provider,
+            );
+            assert_eq!(
+                GenerationCache::get_block_state(&chunk, &pos.0),
+                expected.default_state.id
+            );
+        }
+    }
+
+    #[test]
     fn dimensions_taller_than_their_noise_settings_generate_all_sections() {
         for (dimension, terrain_state) in [
             (
