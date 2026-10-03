@@ -8,6 +8,18 @@ Schedule: daily at 09:00 Europe/Prague, in this Codex chat (`maintain-pumpkin-fi
 The user authorized ongoing pushes to this fork on 2026-10-03. After validation,
 push the maintenance branch to `fork`; deployment is separate.
 
+## Linux releases
+
+`.github/workflows/fork-linux-release.yml` builds Linux x86_64 musl binaries on
+code/build changes pushed to the maintenance branch. It uses the normal release
+profile, checks native Linux startup and console shutdown in a temporary world,
+and publishes `pumpkin-linux-x86_64-musl.tar.gz` plus SHA-256 checksums to an
+immutable `fork-linux-<commit>` GitHub release. Old releases and tags remain.
+A successful source push can precede completion of the release build; check its
+workflow result before reporting a new Linux binary as available.
+
+The user confirmed both gameplay fixes with the macOS build on 2026-10-03.
+
 ## Patch commits
 
 - `e58626324`: tree provider resolution and regression.
