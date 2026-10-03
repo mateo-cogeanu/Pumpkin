@@ -5,7 +5,8 @@ Upstream: https://github.com/Pumpkin-MC/Pumpkin (`origin/master`)
 Maintenance branch: `fix/floating-trees-and-aquatic-mobs`
 Upstream baseline: `1859221e7ad1227f43277f74507f921c0acec83f`
 Schedule: daily at 09:00 Europe/Prague, in this Codex chat (`maintain-pumpkin-fixes`).
-The automation prepares validated local updates; it does not deploy or push.
+The user authorized ongoing pushes to this fork on 2026-10-03. After validation,
+push the maintenance branch to `fork`; deployment is separate.
 
 ## Patch commits
 
@@ -58,10 +59,16 @@ References: vanilla Java server 26.3, bundled provider JSON and tags;
 - Regenerate data if required, run fmt, affected-crate/dependent clippy and tests,
   the existing worldgen feature benchmark against the unpatched baseline, and a
   scratch server boot. Advance maintenance branch only after checks pass.
+- Preserve published history: merge upstream into an integration branch based on
+  the maintenance branch and remove/adapt redundant patch code as needed. Fetch
+  `fork` before pushing and preserve any remote changes. Push only a validated
+  fast-forward update to `fork/fix/floating-trees-and-aquatic-mobs`; never push to
+  upstream `origin`. If histories diverge, integrate safely or report the block.
 - Update baseline, patch commits, evidence and limitations here. For unresolved
   conflicts or failures, preserve the last working branch and report the cause.
 - Notify for meaningful validated updates, removal of redundant patches,
-  failures or required user action. Remote pushes need user authorization.
+  failures or required user action. Ongoing pushes to the maintenance branch of
+  this fork are authorized; no repeated approval is needed.
   Never deploy, overwrite user edits, change saved worlds, force-push, create PRs
   or post GitHub comments automatically.
 
